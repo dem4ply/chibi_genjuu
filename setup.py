@@ -13,7 +13,7 @@ setup(
     license="",
     author="",
     packages=find_packages(),
-    install_requires=[ 'chibi', ],
+    install_requires=[ 'chibi', "elasticsearch_dsl==2.7.5" ],
     long_description=long_description,
     classifiers=[
         'Environment :: Console',
