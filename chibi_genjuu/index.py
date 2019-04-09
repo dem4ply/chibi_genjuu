@@ -1,5 +1,7 @@
 from elasticsearch_dsl import Document, field, InnerDoc
 from chibi.module import import_, export
+from .dweller import Dweller
+from .exceptions import Dangerous_purge
 
 
 SAMPLE_NORMAL = 'normal'
@@ -21,6 +23,20 @@ class Index_inner( InnerDoc ):
         if self.index:
             cls._index._name = self.index
         return cls
+
+    @map.setter
+    def map( self, value ):
+        self.klass = export( value )
+        self.index = value._index._name
+
+    @property
+    def exists( self ):
+        return self.map._index.exists()
+
+    def purge( self ):
+        if '*' in self.map._index._name:
+            raise Dangerous_purge( self.map._index._name )
+        self.map._index.delete()
 
 
 class Dweller_inner( Index_inner ):
@@ -50,10 +66,6 @@ class Population( Document ):
         if index is not None:
             result[ 'index' ] = index
         self.samples.append( result )
-
-
-class Dweller( Document ):
-    pass
 
 
 class Sample( Document ):
