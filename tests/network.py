@@ -199,38 +199,19 @@ class Test_network_with_dense( Test_with_folder ):
         self.assertGreater( result[2], 0.5 )
         self.assertLess( result[3], 0.5 )
 
+    def test_train_load( self ):
+        self.net.build_functions( True )
+        x = [ [ 0, 0 ], [ 0, 1 ], [ 1, 0 ], [ 1, 1 ] ]
+        y = [ 0, 1, 1 , 0 ]
 
-class Test_network_save_load( Test_with_folder ):
-    def setUp( self ):
-        super().setUp()
-        self.net = Network( name=self._testMethodName )
-        self.assertFalse( self.net.layers, "la red tiene capas" )
-        self.layer = Input( name="input" )
-        self.net.add_layer( self.layer )
+        for i in range( 5000 ):
+            self.net.functions.train_predict( x, y )
+        result = self.net.functions.test_predict( x )
+        net_file = self.net.save( self.root_dir )
+        new_network = Network.load( net_file  )
 
-    def test_save( self ):
-        path = self.net.save( self.root_dir )
-        result = path.open().read_yaml()
-        expected = {
-            'name': 'test_save',
-            'order_layers': [ 'input' ],
-            'layers': { 'input': {
-                'batch_size': None,
-                'input_var': 'int64',
-                'name': 'input',
-                'name': 'input',
-                'shape': [ None ],
-                'type': 'chibi_genjuu.network.Input',
-            } }
-        }
-        self.assertEqual( expected, result )
+        new_network.build_functions( True )
 
-    def test_load( self ):
-        path = self.net.save( self.root_dir )
-        new_network = Network.load( path )
-        self.assertEqual( self.net.order_layers, new_network.order_layers )
-        self.assertEqual( self.net.name, new_network.name )
-        for layer_name in self.net.order_layers:
-            self.assertEqual(
-                self.net.layers[ layer_name ].dict,
-                new_network.layers[ layer_name ].dict, )
+        result_2 = new_network.functions.test_predict( x )
+        for x, y in zip( result, result_2 ):
+            self.assertEqual( x, y  )

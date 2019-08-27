@@ -18,7 +18,15 @@ __all__ = [ 'Network' ]
 class Layer( Chibi_object ):
     name = descriptor.String()
 
+    @property
     def real_layer( self ):
+        try:
+            return self._real_layer
+        except AttributeError:
+            self.build_layer()
+            return self._real_layer
+
+    def build_layer( self ):
         raise NotImplementedError
 
     @property
@@ -54,9 +62,8 @@ class Input( Layer ):
         if not self.shape:
             self.shape = [ None ]
 
-    @property
-    def real_layer( self ):
-        return layers.InputLayer(
+    def build_layer( self ):
+        self._real_layer = layers.InputLayer(
             self.real_shape, input_var=self.input_var, name=self.name )
 
     @property
@@ -105,9 +112,8 @@ class Dense( Layer ):
         else:
             raise NotImplementedError
 
-    @property
-    def real_layer( self ):
-        return layers.DenseLayer(
+    def build_layer( self ):
+        self._real_layer = layers.DenseLayer(
             self.input.real_layer, num_units=self.number_units,
             nonlinearity=self.function )
 
@@ -158,14 +164,15 @@ class Network( Chibi_object ):
         self.layers[ layer.name ] = layer
         self.order_layers.append( layer.name )
 
-    def save( self, path=None, folder='.' ):
+    def save( self, path=None ):
         if path is None:
             path = self.name
 
         path = Chibi_path( path )
         if path.is_a_folder:
             path += self.name
-        path = path.add_extensions( 'chibi', 'neuronal', 'yml' )
+        path_network = path.add_extensions( 'chibi', 'neuronal', 'yml' )
+        path_params = path.add_extensions( 'chibi', 'neuronal', 'npz' )
 
         layers = { name: layer.dict for name, layer in self.layers.items() }
 
@@ -175,10 +182,12 @@ class Network( Chibi_object ):
             'name': self.name,
         }
 
-        path.open().write_yaml( file_content )
-        return path
+        path_network.open().write_yaml( file_content )
 
-        mad_files.write_json( full_rute, file_content )
+        params = lasagne.layers.get_all_param_values( self.layer_output )
+        np.savez( path_params, *params )
+
+        return path_network
 
     @classmethod
     def load( cls, path ):
@@ -193,6 +202,13 @@ class Network( Chibi_object ):
             layer_type = import_( layer_dict[ 'type' ] )
             self.layers[ layer_name ] = layer_type.from_dict(
                 layer_dict, self )
+
+        path_params = path.replace_extensions( 'npz' )
+        with np.load( path_params ) as f:
+            param_values = [
+                f[ 'arr_%d' % i ]
+                for i in range( len( f.files ) ) ]
+        lasagne.layers.set_all_param_values( self.layer_output, param_values )
         return self
 
     @property
