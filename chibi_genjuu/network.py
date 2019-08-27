@@ -1,4 +1,5 @@
 from chibi.object import Chibi_object, descriptor
+from chibi.atlas import Chibi_atlas
 import yaml
 import lasagne
 from lasagne import layers
@@ -12,12 +13,6 @@ import theano.tensor as T
 import numpy as np
 
 __all__ = [ 'Network' ]
-
-
-def get_function( name ):
-    name = name.lower()
-    if name == 'softmax':
-        return lasagne.nonlinearities.softmax
 
 
 class Layer( Chibi_object ):
@@ -35,7 +30,7 @@ class Layer( Chibi_object ):
         return yaml.dump( self.dict )
 
     @classmethod
-    def from_dict( cls, d ):
+    def from_dict( cls, d, net=None ):
         return cls( **d )
 
 
@@ -81,29 +76,56 @@ class Input( Layer ):
         return result
 
 
+class Input_field( descriptor.Kind ):
+    kind = Input
+
+class layer_field( descriptor.Kind ):
+    kind = Layer
+
+
 class Dense( Layer ):
-    input = descriptor.String()
+    input = layer_field()
     function_no_liniarity = descriptor.String_choice(
-        default=None, choice=( 'softmax', '', None ) )
+        default=None, choice=( 'softmax', 'sigmoid', 'softplus', '', None ) )
     number_units = descriptor.Integer()
 
     def __init__( self, *args, **kw ):
         super().__init__( *args, **kw )
-        self._function_no_liniarity = get_function(
-            self.function_no_liniarity )
+
+    @property
+    def function( self ):
+        if self.function_no_liniarity == "softmax":
+            return lasagne.nonlinearities.softmax
+        if self.function_no_liniarity == "sigmoid":
+            return lasagne.nonlinearities.sigmoid
+        if self.function_no_liniarity == "softplus":
+            return lasagne.nonlinearities.softplus
+        elif self.function_no_liniarity == "":
+            return None
+        else:
+            raise NotImplementedError
 
     @property
     def real_layer( self ):
-        return layers.DenseLayer( self._input, num_units=self.number_units )
+        return layers.DenseLayer(
+            self.input.real_layer, num_units=self.number_units,
+            nonlinearity=self.function )
 
     @Layer.dict.getter
     def dict( self ):
         result = super().dict
         result.update( dict(
-            input=self.input,
+            input=self.input.name,
             function_no_liniarity=self.function_no_liniarity,
             number_units=self.number_units ) )
         return result
+
+    @classmethod
+    def from_dict( cls, d, net ):
+        input_layer = net.layers[ d.input ]
+        d = d.copy()
+        d[ "input" ] = input_layer
+        return cls( **d )
 
 
 class Network( Chibi_object ):
@@ -128,9 +150,9 @@ class Network( Chibi_object ):
             meta_layers = {}
         if order_layers is None:
             order_layers = []
-        super().__init__( layers=layers, meta_layers=meta_layers,
-                          order_layers=order_layers, functions={},
-                          *args, **kargs )
+        super().__init__(
+            layers=layers, meta_layers=meta_layers,
+            order_layers=order_layers, functions={}, *args, **kargs )
 
     def add_layer( self, layer ):
         self.layers[ layer.name ] = layer
@@ -163,9 +185,54 @@ class Network( Chibi_object ):
         path = Chibi_path( path )
         self = cls()
         read = path.open().read_yaml()
-        for name, dict_layers in read[ 'layers' ].items():
-            layer_type = import_( dict_layers[ 'type' ] )
-            self.layers[ name ] = layer_type.from_dict( dict_layers )
         self.name = read[ 'name' ]
         self.order_layers = read[ 'order_layers' ]
+
+        for layer_name in self.order_layers:
+            layer_dict = read.layers[ layer_name ]
+            layer_type = import_( layer_dict[ 'type' ] )
+            self.layers[ layer_name ] = layer_type.from_dict(
+                layer_dict, self )
         return self
+
+    @property
+    def layer_output( self ):
+        layer = self.layers[ self.order_layers[-1] ]
+        return layer.real_layer
+
+    def build_functions( self, deterministic=False ):
+        l_out = self.layer_output
+        x_sym = T.lmatrix()
+        y_sym = T.lvector()
+
+        output = lasagne.layers.get_output(
+            l_out, x_sym, deterministic=deterministic )
+        pred = output.argmax( -1 )
+
+        #loss = objectives.categorical_crossentropy( output, y_sym ).mean()
+        loss = objectives.binary_crossentropy( output, y_sym ).mean()
+        params = lasagne.layers.get_all_params( l_out )
+        acc = T.mean( T.eq( output, y_sym ) )
+
+        #grad = T.grad( loss, params )
+        #updates = lasagne.updates.sgd( grad, params, learning_rate=0.01 )
+        #updates = lasagne.updates.adam()
+        updates = lasagne.updates.adam( loss, params )
+
+        f_train = theano.function(
+            [ x_sym, y_sym ], [ loss, acc ], updates=updates )
+        f_train_pred = theano.function(
+            [ x_sym, y_sym ], [ loss, acc, output ], updates=updates )
+        f_val = theano.function( [ x_sym, y_sym ], [ loss, acc ] )
+
+        f_predict = theano.function( [ x_sym ], pred )
+        f_test_predict = theano.function( [ x_sym ], output )
+
+        self.functions = Chibi_atlas( {
+            'train': f_train,
+            'train_predict': f_train_pred,
+            'val': f_val,
+            'predict': f_predict,
+            'test_predict': f_test_predict,
+        } )
+        return self.functions
